@@ -6,17 +6,16 @@ import pandas_ta as ta
 import ccxt
 import logging
 
-from pprint import pprint
-
 MAX_POSITION_COUNT = 3
-
 
 class BollingerbandBreakout():
     def __init__(self, base, quote):
+        self.base = base
+        self.quote = quote
         self.logger = logging.getLogger('BollingerbandBreakout')
         logging.basicConfig(
             format='%(asctime)s %(levelname)s:%(message)s',
-            filename=f'bb_breakout_{self.base}.log',
+            filename=f'./log/bb_breakout_{self.base}.log',
             level=logging.INFO)
         load_dotenv()
         api_key = os.getenv('BINANCE_ACCESS_KEY')
@@ -27,12 +26,10 @@ class BollingerbandBreakout():
             'options': {
                 'defaultType': 'future',
             }})
-        self.base = base
-        self.quote = quote
         self.asset = f'{self.base}/{self.quote}'
         self.interval = '4h'
         balance = self.exchange.fetch_balance()
-        self.cash = balance[self.quote]['free']
+        self.cash = balance[self.quote]['total']
         self.leverage = 5
         self.long_position_count = 0
         self.short_position_count = 0
@@ -53,8 +50,15 @@ class BollingerbandBreakout():
                 and ohlcv_df['volume'].iloc[-1] > volume_threshold * 3:
             order = self.exchange.create_market_buy_order(self.asset, qty)
             self.long_position_count += 1
+            self.logger.info(order)
             # self.logger.info(
-            #     f'Open long position; order_id: {}, price:{}, avg_price:{}, qty: {qty}, total_fee: {}, position_count: {self.long_position_count}')
+            #     f'Open long position; symbol:{self.asset}, 
+            #         order_id:{order["id"]}, 
+            #         price:{order["cost"]}, 
+            #         avg_price:{order["average"]}, 
+            #         qty: {qty}, 
+            #         fee:{order["fee"]["cost"]}{order["fee"]["currency"]}, 
+            #         position_count: {self.long_position_count}')
 
         # open short position
         if self.long_position_count == 0 and self.short_position_count <= MAX_POSITION_COUNT \
@@ -63,6 +67,15 @@ class BollingerbandBreakout():
                 and ohlcv_df['volume'].iloc[-1] > volume_threshold * 3:
             order = self.exchange.create_market_sell_order(self.asset, qty)
             self.short_position_count += 1
+            self.logger.info(order)
+            # self.logger.info(
+            #     f'Open short position; symbol:{self.asset}, 
+            #         order_id:{order["id"]}, 
+            #         price:{order["cost"]}, 
+            #         avg_price:{order["average"]}, 
+            #         qty: {qty}, 
+            #         fee:{order["fee"]["cost"]}{order["fee"]["currency"]}, 
+            #         position_count: {self.short_position_count}')
 
         # close long position
         if self.long_position_count > 0 and ohlcv_df['close'].iloc[-1] <= bbands['BBM_20_2.0']:
@@ -74,6 +87,14 @@ class BollingerbandBreakout():
             qty = open_position['positionAmt']
             order = self.exchange.create_market_sell_order(self.asset, qty)
             self.long_position_count = 0
+            self.logger.info(order)
+            # self.logger.info(
+            #     f'Close long position; symbol:{self.asset},
+            #         price:{order["cost"]}, 
+            #         avg_price:{order["average"]}, 
+            #         qty: {qty}, 
+            #         fee:{order["fee"]["cost"]}{order["fee"]["currency"]},
+            #         realized_pnl:{order["info"]["realizedPnl"]}')
 
         # close short position
         if self.short_position_count > 0 and ohlcv_df['close'].iloc[-1] >= bbands['BBM_20_2.0']:
@@ -85,6 +106,14 @@ class BollingerbandBreakout():
             qty = open_position['positionAmt']
             order = self.exchange.create_market_buy_order(self.asset, qty)
             self.short_position_count = 0
+            self.logger.info(order)
+            # self.logger.info(
+            #     f'Close short position; symbol:{self.asset},
+            #         price:{order["cost"]}, 
+            #         avg_price:{order["average"]}, 
+            #         qty: {qty}, 
+            #         fee:{order["fee"]["cost"]}{order["fee"]["currency"]},
+            #         realized_pnl:{order["info"]["realizedPnl"]}')
         self.logger.info('End trading iteration')
 
     def _fetch_ohlcv(self, asset, interval):
@@ -101,7 +130,6 @@ class BollingerbandBreakout():
                 return p
         return None
 
-
 if __name__ == '__main__':
-    strategy = BollingerbandBreakout()
+    strategy = BollingerbandBreakout('ETH', 'USDT')
     strategy.on_trading_iteration()
