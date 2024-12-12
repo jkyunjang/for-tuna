@@ -1,14 +1,8 @@
-'''
-    하나의 종목에 대한 ETF 페어(positive-inverse)에 대해서만 거래만 가능한 전략
-'''
-
+import logging
 from datetime import datetime as dt
-from mytrader.exchanges.koreainvestment import KoreaInvestment, MarketClass, EtfInfo, PositionInfo
-from mytrader.trader import Trader
+from .. import PROJECT_ROOT_PATH
+from ..module.koreainvestment import KoreaInvestment
 
-'''
-    아래 상수에 원하는 종목 코드 및 기타 설정을 입력
-'''
 POSITIVE_ETF_CODE = '304940'  # kodex nasdaq 100(H)
 INVERSE_ETF_CODE = '409810'  # kodex nasdaq 100 inverse
 DISPARITY_SUM = -0.15
@@ -19,25 +13,30 @@ MAX_CASH = 2_000_000
 # 괴리율 직접 계산
 # 호가 불러와서 평단가 괴리율 계산
 class DisparityArbitragy:
-    def __init__(self):
+    def __init__(self, positive_etf_code, inverse_etf_code, disparity_sum, min_cash, max_cash) -> None:
+        self._positive_etf_code = positive_etf_code
+        self._inverse_etf_code = inverse_etf_code
+        self._disparity_sum = disparity_sum
+        self._min_cash = min_cash
+        self._max_cash = max_cash
+        self.logger = logging.getLogger('EtfDisparity')
+        logging.basicConfig(format='%(asctime)s %(levelname)s:%(message)s',
+            filename=f'{PROJECT_ROOT_PATH}/log/etf_disparity_{self._positive_etf_code}.log',
+            level=logging.INFO)
         self._broker = KoreaInvestment()
-        self._trader = Trader()
         self._diff = 0
 
     def on_trading_iteration(self):
-        self._positive_etf_position = self._broker.get_open_position(
-            POSITIVE_ETF_CODE)
-        self._inverse_etf_position = self._broker.get_open_position(
-            INVERSE_ETF_CODE)
-        self._positive_etf_info = self._broker.get_etf_info(
-            POSITIVE_ETF_CODE, MarketClass.KOSPI)
-        self._inverse_etf_info = self._broker.get_etf_info(
-            INVERSE_ETF_CODE, MarketClass.KOSPI)
-
-        print(
-            f'[DisparityArbitragy] sum of disparity rate is {self._positive_etf_info.disparity_rate + self._inverse_etf_info.disparity_rate}')
-        if self._positive_etf_position == None and self._is_time_near_market_closing():
-            if self._positive_etf_info.disparity_rate + self._inverse_etf_info.disparity_rate <= -0.15:  # buy signal
+        self._positive_etf_position = self._broker.get_open_position(POSITIVE_ETF_CODE)
+        self._inverse_etf_position = self._broker.get_open_position(INVERSE_ETF_CODE)
+        
+        disparity_sum = self._positive_etf_info.disparity_rate + self._inverse_etf_info.disparity_rate
+        self.logger.info(f'Sum of disparity rate: {disparity_sum}')
+        
+        # buy signal
+        if self._positive_etf_position == None \
+            and self._is_time_near_market_closing() \
+            and disparity_sum <= -0.15:  
                 print(f'[DisparityArbitragy] buy signal is up')
                 positive_order_size, inverse_order_size, self._diff = self._calculate_order_size(
                     self._positive_etf_info.current_price,

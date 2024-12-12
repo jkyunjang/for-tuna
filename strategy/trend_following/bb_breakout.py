@@ -5,6 +5,7 @@ import numpy as np
 import pandas_ta as ta
 import ccxt
 import logging
+from strategy import PROJECT_ROOT_PATH
 
 MAX_POSITION_COUNT = 3
 
