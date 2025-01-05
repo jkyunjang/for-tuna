@@ -1,124 +1,136 @@
 import logging
+from typing import Optional, Literal 
 from datetime import datetime as dt
-from .. import PROJECT_ROOT_PATH
-from ..module.koreainvestment import KoreaInvestment
+from strategy import PROJECT_ROOT_PATH
+from exchange.koreainvestment import KoreaInvestment
+from pprint import pprint
 
-POSITIVE_ETF_CODE = '304940'  # kodex nasdaq 100(H)
-INVERSE_ETF_CODE = '409810'  # kodex nasdaq 100 inverse
-DISPARITY_SUM = -0.15
-MIN_CASH = 0
-MAX_CASH = 2_000_000
-
-
-# 괴리율 직접 계산
-# 호가 불러와서 평단가 괴리율 계산
 class DisparityArbitragy:
-    def __init__(self, positive_etf_code, inverse_etf_code, disparity_sum, min_cash, max_cash) -> None:
+    def __init__(self, positive_etf_code, inverse_etf_code, base_disparity, min_cash=0, max_cash=2_000_000) -> None:
         self._positive_etf_code = positive_etf_code
         self._inverse_etf_code = inverse_etf_code
-        self._disparity_sum = disparity_sum
+        self._base_disparity = base_disparity
         self._min_cash = min_cash
         self._max_cash = max_cash
-        self.logger = logging.getLogger('EtfDisparity')
-        logging.basicConfig(format='%(asctime)s %(levelname)s:%(message)s',
-            filename=f'{PROJECT_ROOT_PATH}/log/etf_disparity_{self._positive_etf_code}.log',
-            level=logging.INFO)
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.INFO)
+        file_handler = logging.FileHandler(f'{PROJECT_ROOT_PATH}/log/etf_disparity_{self._positive_etf_code}.log')
+        formatter = logging.Formatter(f"%(asctime)s [DisparityArbitragy] %(levelname)s: %(message)s")
+        file_handler.setFormatter(formatter)
+        self.logger.addHandler(file_handler)
         self._broker = KoreaInvestment()
-        self._diff = 0
 
-    def on_trading_iteration(self):
-        self._positive_etf_position = self._broker.get_open_position(POSITIVE_ETF_CODE)
-        self._inverse_etf_position = self._broker.get_open_position(INVERSE_ETF_CODE)
+    def on_trading_iteration(self) -> None:
+        self.logger.info(f'Start trading iteration: exchange=KoreaInvestment, \
+positive_etf: {self._positive_etf_code}, \
+inverse_etf={self._inverse_etf_code}, \
+base_disparity={self._base_disparity} \
+min_cash={self._min_cash}, \
+max_cash={self._max_cash}')
         
-        disparity_sum = self._positive_etf_info.disparity_rate + self._inverse_etf_info.disparity_rate
-        self.logger.info(f'Sum of disparity rate: {disparity_sum}')
+        diff = 0
+        positive_etf_position = self._broker.fetch_open_position(self._positive_etf_code)
+        inverse_etf_position = self._broker.fetch_open_position(self._inverse_etf_code)
+        
+        self.positive_etf_price = self._broker.fetch_etf_price(self._positive_etf_code)
+        self.inverse_etf_price = self._broker.fetch_etf_price(self._inverse_etf_code)
+        
+        positive_etf_orderbook = self._broker.fetch_orderbook(self._positive_etf_code)
+        inverse_etf_orderbook = self._broker.fetch_orderbook(self._inverse_etf_code)
+        
+        positive_buy_avg_price, positive_buy_disparity_rate = self._calculate_average_disparity(positive_etf_orderbook, self.positive_etf_price.nav, 'buy')
+        inverse_buy_avg_price, inverse_buy_disparity_rate = self._calculate_average_disparity(inverse_etf_orderbook, self.inverse_etf_price.nav, 'buy')
+        buy_disparity_sum = positive_buy_disparity_rate + inverse_buy_disparity_rate
+        self.logger.info(f'current positive_avg_price: {positive_buy_avg_price}, inverse_avg_price: {inverse_buy_avg_price}, disparity_sum: {buy_disparity_sum}')
         
         # buy signal
-        if self._positive_etf_position == None \
+        if positive_etf_position == None \
             and self._is_time_near_market_closing() \
-            and disparity_sum <= -0.15:  
-                print(f'[DisparityArbitragy] buy signal is up')
-                positive_order_size, inverse_order_size, self._diff = self._calculate_order_size(
-                    self._positive_etf_info.current_price,
-                    self._inverse_etf_info.current_price,
-                    MIN_CASH,
-                    MAX_CASH)
-                self._buy_etf_pair(positive_order_size, inverse_order_size)
-        elif self._positive_etf_position != None and self._positive_etf_position.size > 0:
-            if self._positive_etf_info.disparity_rate + self._inverse_etf_info.disparity_rate > 0:  # sell signal
-                print(f'[DisparityArbitragy] sell signal is up')
-                self._sell_etf_pair(
-                    self._positive_etf_position.size, self._inverse_etf_position.size)
+            and buy_disparity_sum <= self._base_disparity:  
+                self.logger.info(f'buy signal is up')
+                positive_order_size, inverse_order_size, _ = self._calculate_order_size(
+                    positive_buy_avg_price,
+                    inverse_buy_avg_price,
+                    self._min_cash,
+                    self._max_cash)
+                result = self._submit_order_etf_pair(self._positive_etf_code, positive_order_size, self._inverse_etf_code, inverse_order_size, 'buy', 0, 'market')        
+        # sell signal
+        elif positive_etf_position != None and positive_etf_position.size > 0:
+            _, positive_sell_disparity_rate = self._calculate_average_disparity(positive_etf_orderbook, self.positive_etf_price.nav, 'sell')
+            _, inverse_sell_disparity_rate = self._calculate_average_disparity(inverse_etf_orderbook, self.inverse_etf_price.nav, 'sell')
+            sell_disparity_sum = positive_sell_disparity_rate + inverse_sell_disparity_rate
+            if sell_disparity_sum > 0:
+                self.logger.info(f'sell signal is up')
+                result = self._submit_order_etf_pair(self._positive_etf_code, positive_etf_position.size, self._inverse_etf_code, inverse_etf_position.size, 'sell', 0, 'market')
+            # reblancing positions
             elif self._is_time_near_market_closing():
-                total_amount = self._positive_etf_position.size * self._positive_etf_position.current_price + \
-                    self._inverse_etf_position.size * self._inverse_etf_position.current_price
-                positive_order_size, inverse_order_size, self._diff = self._calculate_order_size(
-                    self._positive_etf_info.current_price,
-                    self._inverse_etf_info.current_price,
+                total_amount = positive_etf_position.size * self.positive_etf_price.current_price + inverse_etf_position.size * self.inverse_etf_price.current_price
+                positive_order_size, inverse_order_size, _ = self._calculate_order_size(
+                    positive_buy_avg_price,
+                    inverse_buy_avg_price,
                     min_cash=total_amount,
-                    max_cash=MAX_CASH)
+                    max_cash=self._max_cash)
                 if positive_order_size == 0:
-                    print(
-                        f'[DisparityArbitragy] cannot buy more etf pair for rebalancing')
-                    self._sell_etf_pair(
-                        self._positive_etf_position.size, self._inverse_etf_position.size)
+                    self.logger.error(f'Cannot buy more etf pair for rebalancing')
+                    result = self._submit_order_etf_pair(self._positive_etf_code, positive_etf_position.size, self._inverse_etf_code, inverse_etf_position.size, 'sell', 0, 'market')
                 else:
-                    print(f'[DisparityArbitragy] buy more etf pair for rebalancing')
-                    self._buy_etf_pair(
-                        positive_order_size - self._positive_etf_position.size,
-                        inverse_order_size - self._inverse_etf_position.size)
+                    self.logger.info(f'buy more etf pair for rebalancing')
+                    result = self._submit_order_etf_pair(
+                        self._positive_etf_code, 
+                        positive_order_size - positive_etf_position.size,
+                        self._inverse_etf_code,
+                        inverse_order_size - inverse_etf_position.size,
+                        0, 'market')
 
-    def _buy_etf_pair(self, positive_order_size, inverse_order_size):
-        current_cash = self._broker.get_account_cash()
-        if current_cash < 0:
-            print(f'Not enough cash: currnet={current_cash}')
-            return
-        buy_order_positive = {
-            "code": POSITIVE_ETF_CODE,
-            "side": "buy",
-            "size": str(positive_order_size),
-            "price": str(self._positive_etf_info.current_price),
-            "type": "market"
+    def _submit_order_etf_pair(self, positive_etf_code, positive_order_size, inverse_etf_code, inverse_order_size, side, price, order_type) -> tuple:
+        positive_order = {
+            "code": positive_etf_code,
+            "side": side,
+            "size": positive_order_size,
+            "price": price,
+            "type": order_type
         }
-        buy_order_inverse = {
-            "code": INVERSE_ETF_CODE,
-            "side": "buy",
-            "size": str(inverse_order_size),
-            "price": str(self._positive_etf_info.current_price),
-            "type": "market"
+        inverse_order = {
+            "code": inverse_etf_code,
+            "side": side,
+            "size": inverse_order_size,
+            "price": price,
+            "type": order_type
         }
-        print(
-            f'DisparityArbitragy excute buy orders: pos_size={positive_order_size} inverse_size={inverse_order_size}')
+        self.logger.info(f'Submit {side} market orders: pos_size={positive_order_size}, pos_price:{self.positive_etf_price.current_price} \
+inverse_size={inverse_order_size}, inverse_price={self.inverse_etf_price.current_price}')
+        return self._broker.submit_order(positive_order), self._broker.submit_order(inverse_order)
 
-        self._broker.submit_order(buy_order_positive)
-        self._broker.submit_order(buy_order_inverse)
-
-    def _sell_etf_pair(self, positive_order_size, inverse_order_size):
-        sell_order_positive = {
-            "code": POSITIVE_ETF_CODE,
-            "side": "sell",
-            "size": str(positive_order_size),
-            "price": str(self._positive_etf_info.current_price),
-            "type": "market"
-        }
-        sell_order_inverse = {
-            "code": INVERSE_ETF_CODE,
-            "side": "sell",
-            "size": str(inverse_order_size),
-            "price": str(self._positive_etf_info.current_price),
-            "type": "market"
-        }
-        print(
-            f'DisparityArbitragy excute sell orders: pos_size={positive_order_size} inverse_size={inverse_order_size}')
-        self._broker.submit_order(sell_order_positive)
-        self._broker.submit_order(sell_order_inverse)
-
-    def _calculate_disparity(self):
-        pass
-
+    def _calculate_average_disparity(self, orderbook, nav, side=Literal['buy', 'sell']) -> tuple:
+        if side == 'buy':
+            order_side = 'askp'
+        elif side == 'sell':
+            order_side = 'bidp'
+        else:
+            raise ValueError(f'Invalid side: {side}')
+        max_available = self._max_cash / 2
+        remain_cash = max_available
+        total_qty = 0
+        orderbook_price = [f'{order_side}{n}' for n in range(1, 11)]
+        orderbook_qty = [f'{order_side}_rsqn{n}' for n in range(1, 11)]
+        for price_key, qty_key in zip(orderbook_price, orderbook_qty):
+            total_price = orderbook[price_key] * orderbook[qty_key]
+            if total_price >= remain_cash:
+                if remain_cash == max_available:
+                    avg_price = orderbook[price_key]
+                else:
+                    remain_qty = remain_cash / orderbook[price_key]
+                    total_qty += remain_qty
+                    avg_price = max_available / total_qty
+                break
+            else:
+                remain_cash -= total_price
+                total_qty += orderbook[qty_key]
+        return (avg_price, (avg_price - nav) / nav * 100)
+    
     def _calculate_order_size(self, positive_price: int, inverse_price: int, min_cash: int, max_cash=3_000_000) -> tuple:
         optimal_positive_size = 0
-        optimal_reverse_size = 0
+        optimal_inverse_size = 0
         total_cost_positive = 0
         total_cost_inverse = 0
 
@@ -126,26 +138,23 @@ class DisparityArbitragy:
         max_positive_size = int((max_cash / 2) / positive_price)
         max_inverse_size = int((max_cash / 2) / inverse_price)
         for positive_size in range(1, max_positive_size):
-            reverse_size = round(
-                positive_price / inverse_price * positive_size)
+            inverse_size = round(positive_price / inverse_price * positive_size)
             for delta in [0, 1]:
-                current_reverse_size = reverse_size + delta
-                if current_reverse_size <= 0 or reverse_size > max_inverse_size:
+                current_inverse_size = inverse_size + delta
+                if current_inverse_size <= 0 or inverse_size > max_inverse_size:
                     continue
                 positive_cost = positive_price * positive_size
-                inverse_cost = inverse_price * current_reverse_size
+                inverse_cost = inverse_price * current_inverse_size
                 if positive_cost + inverse_cost < min_cash:
                     continue
                 difference = abs(positive_cost - inverse_cost)
                 if difference < min_difference:
                     min_difference = difference
                     optimal_positive_size = positive_size
-                    optimal_reverse_size = current_reverse_size
+                    optimal_inverse_size = current_inverse_size
                     total_cost_positive = positive_cost
                     total_cost_inverse = inverse_cost
-        print(optimal_positive_size, optimal_reverse_size,
-              abs(total_cost_positive - total_cost_inverse))
-        return optimal_positive_size, optimal_reverse_size, abs(total_cost_positive - total_cost_inverse)
+        return optimal_positive_size, optimal_inverse_size, abs(total_cost_positive - total_cost_inverse)
 
     def _is_time_near_market_closing(self):
         return dt.strptime('15:00', '%H:%M').time() < dt.now().time() < dt.strptime('15:20', '%H:%M').time()
