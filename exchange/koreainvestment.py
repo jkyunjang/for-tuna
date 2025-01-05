@@ -2,8 +2,10 @@ import os
 import requests as rq
 import dill
 from datetime import datetime as dt
+from dataclasses import dataclass 
 from typing import Optional
-from .. import PROJECT_ROOT_PATH
+from dotenv import load_dotenv
+from strategy import PROJECT_ROOT_PATH
     
 class _Token():
     # TOKEN_LEGTH = 350
@@ -14,8 +16,24 @@ class _Token():
         self.expiration_time = dt.strptime(access_token_token_expired, '%Y-%m-%d %H:%M:%S')
         self.token = f'{self.token_type} {self._access_token}'
 
+@dataclass
+class Position:
+    size: int
+    
+@dataclass
+class Order:
+    timestamp: dt
+    id: int
+
+@dataclass
+class EtfPrice:
+    current_price: float
+    nav: float
+    disparity: float
+
 class KoreaInvestment(): 
     def __init__(self) -> None:
+        load_dotenv(override=True)
         self._access_key = os.getenv('KI_ACCESS_KEY')
         self._secret_key = os.getenv('KI_SECRET_KEY')
         self._account_num = os.getenv('KI_ACCOUNT_NUM')
@@ -52,7 +70,7 @@ class KoreaInvestment():
         url = self._url + '/oauth2/tokenP'
         res = rq.post(url, json=body, headers=headers)
         if res.status_code != 200:
-            raise ConnectionRefusedError(f'{res.status_code} {res.reason}')
+            raise ConnectionRefusedError(f'{res.text}')
         token = _Token(**res.json())
         with open(self._token_file_path, 'wb') as f:
             dill.dump(token, f)
@@ -108,7 +126,7 @@ class KoreaInvestment():
         
         return data['output']['nrcvb_buy_amt']
     
-    def fetch_open_position(self, code) -> Optional[dict]:
+    def fetch_open_position(self, code) -> Optional[Position]:
         headers = self._make_appkey_header("TTTC8434R")
         url = self._url + '/uapi/domestic-stock/v1/trading/inquire-balance'
         params = self._make_account_num_param(
@@ -130,21 +148,21 @@ class KoreaInvestment():
         if data['rt_cd'] != '0':
             raise ValueError(f'{data["rt_cd"]} {data["msg1"]}')
         
-        result = None
+        found = None
         for open_position in data['output1']:
             if open_position['pdno'] == code:
-                result = open_position
+                found = Position(int(open_position['hold_qty']))
                 
-        return result
+        return found
     
     def submit_order(self, order: dict) -> dict:
         if order['side'] == 'buy':
             tr_id = 'TTTC0802U'
-        else:
+        else: # sell side
             tr_id = 'TTTC0801U'
         if order['type'] == 'limit':
             order_type = '00'
-        else:
+        else: # market order
             order_type = '01'
         headers = self._make_appkey_header(tr_id)
         body = {
@@ -152,8 +170,8 @@ class KoreaInvestment():
             "ACNT_PRDT_CD": self._account_num_first_8digit,
             "PDNO": order['code'],
             "ORD_DVSN": order_type,
-            "ORD_QTY": order['size'],
-            "ORD_UNPR": order['price'],
+            "ORD_QTY": str(order['size']),
+            "ORD_UNPR": str(order['price']),
         }
         url = self._url + '/uapi/domestic-stock/v1/trading/order-cash'
         res = rq.post(url, json=body, headers=headers)
@@ -165,7 +183,9 @@ class KoreaInvestment():
         if data['rt_cd'] != '0':
             raise ValueError(f'{data["rt_cd"]} {data["msg1"]}')
 
-        return data
+        timestamp = dt.strptime(data['output']['ORD_TMD'], '%H%M%S')
+        now_ts = dt.now().replace(hour=timestamp.hour, minute=timestamp.minute, second=timestamp.second)
+        return Order(now_ts, int(data['output']['ORD_NO']))
     
     def fetch_orderbook(self, code) -> dict:
         headers = self._make_appkey_header("FHKST01010200")
@@ -182,9 +202,32 @@ class KoreaInvestment():
         if data['rt_cd'] != '0':
             raise ValueError(f'{data["rt_cd"]} {data["msg1"]}')
         
-        return data
+        for k, v in data['output1'].items():
+            data['output1'][k] = int(v)
+            
+        return data['output1']
+
+    def fetch_etf_price(self, code) -> dict:
+        headers = self._make_appkey_header("FHPST02400000")
+        url = self._url + '/uapi/etfetn/v1/quotations/inquire-price'
+        params = {
+            'fid_input_iscd': code,
+            'fid_cond_mrkt_div_code': 'J'
+        }
+        res = rq.get(url, headers=headers, params=params)
+        if res.status_code != 200:
+            raise ConnectionRefusedError(f'{res.status_code} {res.reason}')
+        
+        data = res.json()
+        if data['rt_cd'] != '0':
+            raise ValueError(f'{data["rt_cd"]} {data["msg1"]}')
+        
+        return EtfPrice(float(data['output']['stck_prpr']), 
+                        float(data['output']['nav']),
+                        float(data['output']['dprt']))
 
     def _make_appkey_header(self, tr_id, **kwargs) -> dict :
+        self._token = self._get_auth_token()
         return {
             "content-type": "application/json",
             "authorization": self._token.token,
