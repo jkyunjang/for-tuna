@@ -62,15 +62,19 @@ volume_threshold: {volume_threshold}')
                 and ohlcv_df['volume'].iloc[-2] > volume_threshold:
             order = self.exchange.create_market_buy_order(self.asset, qty)
             self._long_position_count += 1
-            self._logger.info(order)
             self._logger.info(
                 f'Open long position; \
 symbol:{self.asset}, \
 order_id:{order["id"]}, \
-price:{order["cost"]}, \
+type:{order["type"]}, \
+side:{order["side"]}, \
+price:{order["price"]}, \
 avg_price:{order["average"]}, \
-qty: {qty}, \
-fee:{order["fee"]["cost"]}{order["fee"]["currency"]}, \
+cost:{order["cost"]}, \
+amount: {order["amount"]}, \
+filled:{order["filled"]}, \
+remaining:{order["remaining"]}, \
+status:{order["status"]}, \
 position_count: {self._long_position_count}')
 
         # open short position
@@ -80,15 +84,19 @@ position_count: {self._long_position_count}')
                 and ohlcv_df['volume'].iloc[-2] > volume_threshold:
             order = self.exchange.create_market_sell_order(self.asset, qty)
             self._short_position_count += 1
-            self._logger.info(order)
             self._logger.info(
                 f'Open short position; \
 symbol:{self.asset}, \
 order_id:{order["id"]}, \
-price:{order["cost"]}, \
+type:{order["type"]}, \
+side:{order["side"]}, \
+price:{order["price"]}, \
 avg_price:{order["average"]}, \
-qty: {qty}, \
-fee:{order["fee"]["cost"]}{order["fee"]["currency"]}, \
+cost:{order["cost"]}, \
+amount: {order["amount"]}, \
+filled:{order["filled"]}, \
+remaining:{order["remaining"]}, \
+status:{order["status"]}, \
 position_count: {self._short_position_count}')
 
         # close long position
@@ -101,15 +109,19 @@ position_count: {self._short_position_count}')
             qty = open_position['positionAmt']
             order = self.exchange.create_market_sell_order(self.asset, qty)
             self._long_position_count = 0
-            self._logger.info(order)
             self._logger.info(
                 f'Close long position; \
 symbol:{self.asset}, \
-price:{order["cost"]}, \
+order_id:{order["id"]}, \
+type:{order["type"]}, \
+side:{order["side"]}, \
+price:{order["price"]}, \
 avg_price:{order["average"]}, \
-qty: {qty}, \
-fee:{order["fee"]["cost"]}{order["fee"]["currency"]}, \
-realized_pnl:{order["info"]["realizedPnl"]}')
+cost:{order["cost"]}, \
+amount: {order["amount"]}, \
+filled:{order["filled"]}, \
+remaining:{order["remaining"]}, \
+status:{order["status"]}')
 
         # close short position
         if self._short_position_count > 0 and ohlcv_df['close'].iloc[-1] >= bbands['BBM_20_2.0']:
@@ -121,15 +133,19 @@ realized_pnl:{order["info"]["realizedPnl"]}')
             qty = open_position['positionAmt']
             order = self.exchange.create_market_buy_order(self.asset, qty)
             self._short_position_count = 0
-            self._logger.info(order)
             self._logger.info(
                 f'Close short position; \
 symbol:{self.asset}, \
-price:{order["cost"]}, \
+order_id:{order["id"]}, \
+type:{order["type"]}, \
+side:{order["side"]}, \
+price:{order["price"]}, \
 avg_price:{order["average"]}, \
-qty: {qty}, \
-fee:{order["fee"]["cost"]}{order["fee"]["currency"]},\
-realized_pnl:{order["info"]["realizedPnl"]}')
+cost:{order["cost"]}, \
+amount: {order["amount"]}, \
+filled:{order["filled"]}, \
+remaining:{order["remaining"]}, \
+status:{order["status"]}')
         
         self._logger.info(f'End trading iteration: exchange=Binance, symbol={self.base}/{self.quote}, interval={self.interval}, leverage={self.leverage}')
 
