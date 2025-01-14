@@ -1,6 +1,6 @@
+import time
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-import time
 
 '''
 크롬 remote-debugging 모드에서 mexc에 로그인
@@ -9,25 +9,30 @@ import time
 이 API를 사용할 때, 증거금이 충분한지 확인하는 로직 필요
 '''
 class MexcFuture:
-    def __init__(self, coin):
+    '''
+    parameters \n
+    coin - just write base coin name (ex. BTC)
+    '''
+    def __init__(self, coin: str) -> None:
         chrome_options = webdriver.ChromeOptions()
         chrome_options.add_argument(r'user-data-dir=D:\chrome-debug')
         chrome_options.add_argument(f'remote-debugging-port=9222')
         chrome_options.add_experimental_option('detach', True)
         self.__driver = webdriver.Chrome(options=chrome_options)
-        self.__driver.get(f'https://futures.mexc.com/exchange/{coin}_USDT')
+        self.__driver.get(f'https://futures.testnet.mexc.com/exchange/{coin}_USDT')
         # wait for page rendering
         time.sleep(10)
-        if self.__driver.current_url != f'https://futures.mexc.com/exchange/{coin}_USDT':
+        if self.__driver.current_url != f'https://futures.testnet.mexc.com/exchange/{coin}_USDT':
             raise ValueError(f'{coin} is invalid coin')
         self.__mexc_elem = __MexcHttpElement(self.__driver)
         
     '''
+    parameters \n
     side: "long" or "short"
     order_type: currently only supports market
     quantity: contract quantity to buy
     '''
-    def open_position(self, side, quantity, order_type='market'):
+    def open_position(self, side: str, quantity: str, order_type='market') -> None:
         self.__mexc_elem.open_span.click()
         if order_type == 'market':
             self.__mexc_elem.market_span.click()
@@ -42,11 +47,12 @@ class MexcFuture:
             ValueError(f'{side} is invalid position side')
 
     '''
+    parameters \n
     side: "long" or "short"
     order_type: currently only supports market
     quantity: contract quantity to sell
     '''
-    def close_position(self, side, quantity, order_type='market'):
+    def close_position(self, side: str, quantity: str, order_type='market') -> None:
         self.__mexc_elem.close_span.click()
         if order_type == 'market':
             self.__mexc_elem.market_span.click()
