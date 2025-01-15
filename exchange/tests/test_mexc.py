@@ -3,7 +3,7 @@ from exchange.mexc_future import MexcFuture
 
 @pytest.fixture
 def mexc():
-    mexc = MexcFuture('BTC')
+    mexc = MexcFuture('BTC_USDT')
     return mexc
     
 def test_open_long_position(mexc):
@@ -18,3 +18,6 @@ def test_open_short_position(mexc):
 
 def test_close_short_position(mexc):
     assert mexc.close_position('short', 0.001) == None
+    
+def test_get_orderbook(mexc):
+    print(mexc.get_orderbook())
